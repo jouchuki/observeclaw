@@ -11,7 +11,7 @@ ObserveClaw is an OpenClaw plugin that monitors how much each agent spends on la
 Run the following two commands on any machine where OpenClaw is installed. The first command downloads and installs the plugin into OpenClaw's plugin directory. The second command enables it in the gateway configuration.
 
 ```bash
-openclaw plugins install @openclaw/observeclaw
+openclaw plugins install observeclaw
 openclaw plugins enable observeclaw
 ```
 
@@ -253,16 +253,30 @@ The plugin includes pricing for the following models. All prices are per million
 
 | Model | Input | Output | Cache Read | Cache Write |
 |-------|-------|--------|------------|-------------|
-| claude-opus-4-6 | $15.00 | $75.00 | $1.50 | $18.75 |
+| claude-opus-4-6 | $5.00 | $25.00 | $0.50 | $6.25 |
 | claude-sonnet-4-6 | $3.00 | $15.00 | $0.30 | $3.75 |
 | claude-sonnet-4-5 | $3.00 | $15.00 | $0.30 | $3.75 |
-| claude-haiku-4-5 | $0.80 | $4.00 | $0.08 | $1.00 |
+| claude-haiku-4-5 | $1.00 | $5.00 | $0.10 | $1.25 |
+| gpt-5.2 | $1.75 | $14.00 | $0.875 | $1.75 |
+| gpt-5 | $1.25 | $10.00 | $0.625 | $1.25 |
+| gpt-5-mini | $0.25 | $2.00 | $0.125 | $0.25 |
+| gpt-4.1 | $2.00 | $8.00 | $1.00 | $2.00 |
+| gpt-4.1-mini | $0.40 | $1.60 | $0.20 | $0.40 |
+| gpt-4.1-nano | $0.05 | $0.20 | $0.025 | $0.05 |
 | gpt-4o | $2.50 | $10.00 | $1.25 | $2.50 |
 | gpt-4o-mini | $0.15 | $0.60 | $0.075 | $0.15 |
-| o3 | $10.00 | $40.00 | $2.50 | $10.00 |
-| o3-mini / o4-mini | $1.10 | $4.40 | $0.55 | $1.10 |
-| gemini-2.5-pro | $1.25 | $10.00 | $0.315 | $1.25 |
-| gemini-2.5-flash | $0.15 | $0.60 | $0.0375 | $0.15 |
+| o3 | $2.00 | $8.00 | $1.00 | $2.00 |
+| o4-mini | $1.10 | $4.40 | $0.55 | $1.10 |
+| codex-mini | $1.50 | $6.00 | $0.75 | $1.50 |
+| gemini-3.1-pro | $2.00 | $12.00 | $0.50 | $2.00 |
+| gemini-3.1-flash | $0.50 | $3.00 | $0.125 | $0.50 |
+| gemini-3.1-flash-lite | $0.25 | $1.50 | $0.0625 | $0.25 |
+| gemini-2.5-pro | $1.00 | $10.00 | $0.25 | $1.00 |
+| gemini-2.5-flash | $0.30 | $2.50 | $0.075 | $0.30 |
+| deepseek-chat (v3) | $0.28 | $0.42 | $0.028 | $0.28 |
+| deepseek-reasoner (r1) | $0.50 | $2.18 | $0.05 | $0.50 |
+| mistral-medium-3 | $0.40 | $2.00 | $0.04 | $0.40 |
+| llama-4-maverick | $0.27 | $0.85 | $0.027 | $0.27 |
 | ollama/* | $0.00 | $0.00 | $0.00 | $0.00 |
 | lm-studio/* | $0.00 | $0.00 | $0.00 | $0.00 |
 
