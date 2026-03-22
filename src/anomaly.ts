@@ -31,18 +31,30 @@ const detectors: Detector[] = [
 	},
 	{
 		name: "idle_burn",
+		// Track last emitted state per agent to avoid spamming
+		_lastEmitted: new Map<string, { minute: number; spend: number }>(),
 		check(agentId, spend, config) {
 			const idleMs = Date.now() - spend.lastProductiveToolCallAt;
 			const thresholdMs = config.idleBurnMinutes * 60_000;
 			if (spend.callCount > 0 && idleMs > thresholdMs && spend.lastHourCost > 0) {
+				const idleMin = Math.round(idleMs / 60_000);
+				const spendRounded = Math.round(spend.lastHourCost * 100); // cents
+				const last = this._lastEmitted.get(agentId);
+				// Only emit if minute changed OR spend changed
+				if (last && last.minute === idleMin && last.spend === spendRounded) {
+					return null;
+				}
+				this._lastEmitted.set(agentId, { minute: idleMin, spend: spendRounded });
 				return {
 					type: "idle_burn",
 					agentId,
 					severity: "warning",
-					message: `Agent calling LLM for ${Math.round(idleMs / 60_000)}min with no tool output. Spent $${spend.lastHourCost.toFixed(2)} during idle.`,
-					metric: { idleMinutes: Math.round(idleMs / 60_000), spendDuringIdle: spend.lastHourCost },
+					message: `Agent calling LLM for ${idleMin}min with no tool output. Spent $${spend.lastHourCost.toFixed(2)} during idle.`,
+					metric: { idleMinutes: idleMin, spendDuringIdle: spend.lastHourCost },
 				};
 			}
+			// Reset tracking when agent becomes productive again
+			this._lastEmitted.delete(agentId);
 			return null;
 		},
 	},
