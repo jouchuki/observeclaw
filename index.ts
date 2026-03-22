@@ -157,7 +157,7 @@ const plugin = {
 		// --- Hooks ---
 
 		// Track spend on every LLM call
-		api.on("llm_output", (event, ctx) => {
+		api.on("llm_output", (event: any, ctx: any) => {
 			if (!event.usage) return;
 
 			const agentId = ctx.agentId ?? "default";
@@ -174,10 +174,14 @@ const plugin = {
 				ctx.sessionKey,
 			);
 
+			const spend = spendTracker.get(agentId);
 			if (cost > 0) {
-				const spend = spendTracker.get(agentId);
 				api.logger.info(
 					`[observeclaw] ${agentId} | call: $${cost.toFixed(4)} | today: $${spend?.today.toFixed(2)} | ${event.provider}/${event.model}`,
+				);
+			} else {
+				api.logger.warn(
+					`[observeclaw] ${agentId} | call: $0 (no pricing for ${event.provider}/${event.model}) | tokens: in=${event.usage.input ?? 0} out=${event.usage.output ?? 0}`,
 				);
 			}
 		});

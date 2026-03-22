@@ -81,6 +81,19 @@
 						"cacheWrite": { "type": "number" }
 					}
 				}
+			},
+			"webhooks": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"url": { "type": "string" },
+						"minSeverity": { "type": "string", "enum": ["info", "warning", "critical"] },
+						"headers": { "type": "object", "additionalProperties": { "type": "string" } },
+						"timeoutMs": { "type": "number" }
+					},
+					"required": ["url"]
+				}
 			}
 		}
 	},

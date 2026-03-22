@@ -31,11 +31,12 @@ export function checkBudget(agentId: string, config: ObserveClawConfig): BudgetD
 		};
 	}
 
-	// Over budget — block
+	// Over budget — still downgrade (message_sending hook will cancel the outbound)
 	return {
 		action: "block",
 		reason: `Daily budget exceeded: $${(ratio * budget.daily).toFixed(2)}/$${budget.daily.toFixed(2)}`,
-		modelOverride: "__OBSERVECLAW_BUDGET_EXCEEDED__",
+		modelOverride: config.downgradeModel,
+		providerOverride: config.downgradeProvider,
 	};
 }
 

@@ -25,6 +25,17 @@ const DEFAULT_PRICING: Record<string, ModelPricing> = {
 	"openai/o4-mini": { input: 1.1, output: 4.4, cacheRead: 0.55, cacheWrite: 1.1 },
 	"openai/codex-mini": { input: 1.5, output: 6, cacheRead: 0.75, cacheWrite: 1.5 },
 
+	// OpenAI Codex (same pricing as OpenAI, different provider ID in OpenClaw)
+	"openai-codex/gpt-5.4": { input: 1.75, output: 14, cacheRead: 0.875, cacheWrite: 1.75 },
+	"openai-codex/gpt-5.2": { input: 1.75, output: 14, cacheRead: 0.875, cacheWrite: 1.75 },
+	"openai-codex/gpt-5": { input: 1.25, output: 10, cacheRead: 0.625, cacheWrite: 1.25 },
+	"openai-codex/gpt-5-mini": { input: 0.25, output: 2, cacheRead: 0.125, cacheWrite: 0.25 },
+	"openai-codex/gpt-4.1": { input: 2, output: 8, cacheRead: 1, cacheWrite: 2 },
+	"openai-codex/gpt-4o": { input: 2.5, output: 10, cacheRead: 1.25, cacheWrite: 2.5 },
+	"openai-codex/o3": { input: 2, output: 8, cacheRead: 1, cacheWrite: 2 },
+	"openai-codex/o4-mini": { input: 1.1, output: 4.4, cacheRead: 0.55, cacheWrite: 1.1 },
+	"openai-codex/codex-mini": { input: 1.5, output: 6, cacheRead: 0.75, cacheWrite: 1.5 },
+
 	// Google — https://ai.google.dev/gemini-api/docs/pricing
 	"google/gemini-3.1-pro": { input: 2, output: 12, cacheRead: 0.5, cacheWrite: 2 },
 	"google/gemini-3.1-flash": { input: 0.5, output: 3, cacheRead: 0.125, cacheWrite: 0.5 },
