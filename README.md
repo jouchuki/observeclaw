@@ -144,9 +144,7 @@ If the agent has spent less than eighty percent of its daily budget (or whatever
 
 If the agent has spent between the warning threshold and one hundred percent of its daily budget, the plugin forces a model downgrade. It returns an override that switches the model to a cheaper alternative, by default Claude Haiku. The agent continues to function, but at lower cost per call. This gives the agent a soft landing rather than a hard stop. The plugin logs a warning and pushes a `budget_warning` alert.
 
-If the agent has exceeded one hundred percent of its daily budget, the plugin returns a model override pointing to a nonexistent model name. This causes the LLM provider to return an error, which effectively stalls the agent. The plugin simultaneously pushes a `budget_exceeded` alert with critical severity.
-
-As a safety net, the plugin also hooks into `message_sending`. If an over-budget agent somehow produces a response (for example, if one final LLM call slips through at the exact moment the budget is crossed), this hook cancels the outbound message before it reaches the user or channel. The agent's response is silently dropped.
+If the agent has exceeded one hundred percent of its daily budget, the plugin continues to force the downgrade model and pushes a `budget_exceeded` alert with critical severity. The agent can still make calls on the cheaper model, but the plugin also hooks into `message_sending` to cancel outbound messages from over-budget agents. This means the agent's responses are silently dropped — it keeps running on the cheap model but its output never reaches the user or channel.
 
 ### Tool policy enforcement
 
@@ -201,7 +199,7 @@ When the gateway shuts down, the plugin clears all background timers and prints 
 | Type | Severity | Trigger | Action |
 |------|----------|---------|--------|
 | `budget_warning` | warning | Agent spend reaches the configured warning threshold (default 80% of daily budget) | Model downgraded to cheaper alternative |
-| `budget_exceeded` | critical | Agent spend exceeds 100% of daily budget | LLM calls blocked, outbound messages cancelled |
+| `budget_exceeded` | critical | Agent spend exceeds 100% of daily budget | Model downgraded, outbound messages cancelled |
 | `spend_spike` | warning | Hourly spend exceeds 3x the seven-day hourly average | Alert only |
 | `idle_burn` | warning | Agent calling LLM for more than 10 minutes with no tool output | Alert only |
 | `error_loop` | critical | 10 or more consecutive LLM errors | Auto-pause recommended |
@@ -286,7 +284,7 @@ Override or extend this table using the `pricing` configuration field.
 
 The plugin does not persist spend data across gateway restarts. When the gateway stops, all in-memory counters are lost. This will be addressed in a future phase that adds a control plane for persistent telemetry storage.
 
-The plugin does not provide a clean way to block LLM calls. It uses a workaround where it overrides the model to a nonexistent name, causing a provider error. A future phase adds a node-local proxy that cleanly blocks requests before they reach the provider.
+The plugin cannot fully stop an agent from making LLM calls. When the budget is exceeded, it downgrades the model to a cheaper alternative and cancels outbound messages, but the agent process continues running and making calls on the cheaper model. A future phase adds a node-local proxy that cleanly blocks requests before they reach the provider.
 
 The plugin does not hide API keys from agents. Agents still hold their own provider credentials in OpenClaw's auth profiles. A future phase adds a credential proxy that injects keys on behalf of agents so they never see the raw key values.
 
