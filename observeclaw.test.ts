@@ -264,19 +264,19 @@ describe("scenario: Adrian's $10k cache loop", () => {
 			output: 100,
 			cacheWrite: 200_000,
 		});
-		// input: 200k * 15 / 1M = $3.00, output: 100 * 75 / 1M = $0.0075
-		// cacheWrite: 200k * 18.75 / 1M = $3.75
-		// Total per call: ~$6.76
-		expect(cost).toBeGreaterThan(3);
-		expect(cost).toBeLessThan(10);
+		// input: 200k * 5 / 1M = $1.00, output: 100 * 25 / 1M = $0.0025
+		// cacheWrite: 200k * 6.25 / 1M = $1.25
+		// Total per call: ~$2.25
+		expect(cost).toBeGreaterThan(1.5);
+		expect(cost).toBeLessThan(4);
 	});
 
-	it("budget enforcer blocks after ~15 cache writes ($100 budget)", () => {
+	it("budget enforcer blocks after ~44 cache writes ($100 budget)", () => {
 		// Simulate cache writes every 5 minutes
 		let callCount = 0;
 		let blocked = false;
 
-		for (let i = 0; i < 100; i++) {
+		for (let i = 0; i < 200; i++) {
 			spendTracker.record(agentId, "anthropic", "claude-opus-4-6", {
 				input: 200_000,
 				output: 100,
@@ -292,9 +292,9 @@ describe("scenario: Adrian's $10k cache loop", () => {
 		}
 
 		expect(blocked).toBe(true);
-		// Should block after ~15 calls ($6.76 * 15 ≈ $101)
-		expect(callCount).toBeLessThan(20);
-		expect(callCount).toBeGreaterThan(10);
+		// Should block after ~44 calls ($2.25 * 44 ≈ $99)
+		expect(callCount).toBeLessThan(50);
+		expect(callCount).toBeGreaterThan(30);
 
 		const spend = spendTracker.get(agentId)!;
 		// Max damage: ~$100 (daily budget), not $10,542
@@ -304,8 +304,8 @@ describe("scenario: Adrian's $10k cache loop", () => {
 
 	it("model downgrade kicks in before full block", () => {
 		const freshAgent = "optimus-downgrade-test";
-		// Each call costs ~$6.76. 12 calls = ~$81, which is >80% of $100
-		for (let i = 0; i < 12; i++) {
+		// Each call costs ~$2.25. 36 calls = ~$81, which is >80% of $100
+		for (let i = 0; i < 36; i++) {
 			spendTracker.record(freshAgent, "anthropic", "claude-opus-4-6", {
 				input: 200_000,
 				output: 100,
@@ -981,7 +981,7 @@ describe("webhook dispatch", () => {
 });
 
 describe("webhook: Slack formatting", () => {
-	it("formats critical alert with red color and rotating_light emoji", () => {
+	it("formats critical alert with rotating_light emoji in text and blocks", () => {
 		const payload = formatSlackPayload({
 			type: "budget_exceeded",
 			agentId: "sales-agent-01",
@@ -990,22 +990,24 @@ describe("webhook: Slack formatting", () => {
 			message: "Daily budget exceeded: $100.04/$100.00",
 		});
 
-		expect(payload.attachments).toBeDefined();
-		const attachment = (payload.attachments as Record<string, unknown>[])[0];
-		expect(attachment.color).toBe("#dc2626"); // red
-		const blocks = attachment.blocks as Record<string, unknown>[];
-		const text = (blocks[0] as { text: { text: string } }).text.text;
-		expect(text).toContain(":rotating_light:");
-		expect(text).toContain("sales-agent-01");
-		expect(text).toContain("budget_exceeded");
+		// text field is mandatory for Slack
+		expect(typeof payload.text).toBe("string");
+		expect(payload.text as string).toContain(":rotating_light:");
+		expect(payload.text as string).toContain("sales-agent-01");
+
+		// blocks contain structured content
+		const blocks = payload.blocks as Array<{ type: string; text?: { text: string }; elements?: Array<{ text: string }> }>;
+		expect(blocks.length).toBeGreaterThanOrEqual(2);
+		const sectionText = blocks[0].text?.text ?? "";
+		expect(sectionText).toContain(":rotating_light:");
+		expect(sectionText).toContain("sales-agent-01");
+		expect(sectionText).toContain("budget_exceeded");
 		// Should have action context block
-		expect(blocks.length).toBe(2);
-		const contextBlock = blocks[1] as { type: string; elements: Array<{ text: string }> };
-		expect(contextBlock.type).toBe("context");
-		expect(contextBlock.elements[0].text).toContain("auto_pause");
+		const actionBlock = blocks.find((b) => b.type === "context" && b.elements?.[0]?.text.includes("auto_pause"));
+		expect(actionBlock).toBeDefined();
 	});
 
-	it("formats warning alert with amber color and warning emoji", () => {
+	it("formats warning alert with warning emoji", () => {
 		const payload = formatSlackPayload({
 			type: "spend_spike",
 			agentId: "ops-agent",
@@ -1013,16 +1015,14 @@ describe("webhook: Slack formatting", () => {
 			message: "5x normal spend rate",
 		});
 
-		const attachment = (payload.attachments as Record<string, unknown>[])[0];
-		expect(attachment.color).toBe("#f59e0b"); // amber
-		const blocks = attachment.blocks as Record<string, unknown>[];
-		const text = (blocks[0] as { text: { text: string } }).text.text;
-		expect(text).toContain(":warning:");
-		// No action → no context block
-		expect(blocks.length).toBe(1);
+		expect(payload.text as string).toContain(":warning:");
+		const blocks = payload.blocks as Array<{ type: string; text?: { text: string } }>;
+		const sectionText = blocks[0].text?.text ?? "";
+		expect(sectionText).toContain(":warning:");
+		expect(sectionText).toContain("ops-agent");
 	});
 
-	it("formats info alert with blue color", () => {
+	it("formats info alert with information_source emoji", () => {
 		const payload = formatSlackPayload({
 			type: "token_inflation",
 			agentId: "data-agent",
@@ -1030,10 +1030,52 @@ describe("webhook: Slack formatting", () => {
 			message: "Input tokens growing",
 		});
 
-		const attachment = (payload.attachments as Record<string, unknown>[])[0];
-		expect(attachment.color).toBe("#3b82f6"); // blue
-		const blocks = attachment.blocks as Record<string, unknown>[];
-		const text = (blocks[0] as { text: { text: string } }).text.text;
-		expect(text).toContain(":information_source:");
+		expect(payload.text as string).toContain(":information_source:");
+		const blocks = payload.blocks as Array<{ type: string; text?: { text: string } }>;
+		const sectionText = blocks[0].text?.text ?? "";
+		expect(sectionText).toContain(":information_source:");
+		expect(sectionText).toContain("data-agent");
+	});
+
+	it("includes severity context block in all alerts", () => {
+		const payload = formatSlackPayload({
+			type: "idle_burn",
+			agentId: "test-agent",
+			severity: "warning",
+			message: "Agent idle",
+		});
+
+		const blocks = payload.blocks as Array<{ type: string; elements?: Array<{ text: string }> }>;
+		const severityBlock = blocks.find((b) => b.type === "context" && b.elements?.[0]?.text.includes("Severity:"));
+		expect(severityBlock).toBeDefined();
+		expect(severityBlock!.elements![0].text).toContain("warning");
+	});
+
+	it("omits action block when no action present", () => {
+		const payload = formatSlackPayload({
+			type: "spend_spike",
+			agentId: "test",
+			severity: "warning",
+			message: "spike",
+		});
+
+		const blocks = payload.blocks as Array<{ type: string; elements?: Array<{ text: string }> }>;
+		const actionBlock = blocks.find((b) => b.type === "context" && b.elements?.[0]?.text.includes("Action taken:"));
+		expect(actionBlock).toBeUndefined();
+	});
+
+	it("includes action block when action present", () => {
+		const payload = formatSlackPayload({
+			type: "error_loop",
+			agentId: "test",
+			severity: "critical",
+			action: "auto_pause",
+			message: "10 consecutive errors",
+		});
+
+		const blocks = payload.blocks as Array<{ type: string; elements?: Array<{ text: string }> }>;
+		const actionBlock = blocks.find((b) => b.type === "context" && b.elements?.[0]?.text.includes("Action taken:"));
+		expect(actionBlock).toBeDefined();
+		expect(actionBlock!.elements![0].text).toContain("auto_pause");
 	});
 });

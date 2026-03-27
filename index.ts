@@ -1,12 +1,17 @@
-import type { ObserveClawConfig } from "./src/types.js";
-import { DEFAULT_CONFIG } from "./src/types.js";
+import type { ObserveClawConfig } from "./src/types/config.js";
+import { DEFAULT_CONFIG } from "./src/types/config.js";
+import type { AnomalyAlert } from "./src/types/events.js";
+import type { PluginApi } from "./src/types/plugin.js";
 import { setConfigPricing } from "./src/pricing.js";
 import * as spendTracker from "./src/spend-tracker.js";
 import * as alertStore from "./src/alert-store.js";
-import { checkBudget, shouldCancelMessage } from "./src/budget-enforcer.js";
-import { checkTool } from "./src/tool-policy.js";
 import { runDetectors } from "./src/anomaly.js";
 import { dispatchWebhooks } from "./src/webhook.js";
+import { handleLlmOutput } from "./src/hooks/llm-output.js";
+import { validateRoutingOnStartup, handleBeforeModelResolve } from "./src/hooks/model-resolve.js";
+import { handleBeforeToolCall, handleAfterToolCall } from "./src/hooks/tool-hooks.js";
+import { handleMessageSending, handleMessageSent } from "./src/hooks/message-hooks.js";
+import { handleSessionStart, handleSessionEnd, handleGatewayStart, handleGatewayStop } from "./src/hooks/lifecycle.js";
 
 function parseConfig(raw: Record<string, unknown> | undefined): ObserveClawConfig {
 	if (!raw) return DEFAULT_CONFIG;
@@ -20,6 +25,11 @@ function parseConfig(raw: Record<string, unknown> | undefined): ObserveClawConfi
 			},
 			agents: ((raw.budgets as Record<string, unknown>)?.agents as Record<string, Record<string, unknown>>) ?? {},
 		} as ObserveClawConfig["budgets"],
+		routing: {
+			...DEFAULT_CONFIG.routing,
+			...(raw.routing as Record<string, unknown>),
+			evaluators: ((raw.routing as Record<string, unknown>)?.evaluators as ObserveClawConfig["routing"]["evaluators"]) ?? [],
+		} as ObserveClawConfig["routing"],
 		toolPolicy: {
 			defaults: {
 				...DEFAULT_CONFIG.toolPolicy.defaults,
@@ -38,26 +48,21 @@ function parseConfig(raw: Record<string, unknown> | undefined): ObserveClawConfi
 	} as ObserveClawConfig;
 }
 
-const plugin: any = {
+const plugin = {
 	id: "observeclaw",
 	name: "ObserveClaw",
-	description: "Agent spend tracking, budget enforcement, tool policy, and anomaly detection",
+	description: "Agent spend tracking, budget enforcement, routing, tool policy, and anomaly detection",
 	_registerCount: 0,
 
-	register(api: any) {
+	register(api: PluginApi) {
 		const config = parseConfig(api.pluginConfig as Record<string, unknown> | undefined);
-
 		if (!config.enabled) {
 			api.logger.info("[observeclaw] disabled via config");
 			return;
 		}
 
-		// Guard against duplicate registration — OpenClaw calls register() in
-		// both setup and gateway contexts. Skip the first (setup), run the second (gateway).
-		plugin._registerCount = (plugin._registerCount ?? 0) + 1;
-		if (plugin._registerCount < 2) return;
+		(plugin as { _registerCount: number })._registerCount += 1;
 
-		// Apply pricing overrides
 		if (Object.keys(config.pricing).length > 0) {
 			setConfigPricing(config.pricing);
 		}
@@ -68,10 +73,8 @@ const plugin: any = {
 
 		// --- Timers ---
 
-		// Rotate hourly spend buckets
 		const hourlyTimer = setInterval(() => spendTracker.rotateHourly(), 3_600_000);
 
-		// Check for daily/monthly reset
 		let lastDay = new Date().getDate();
 		let lastMonth = new Date().getMonth();
 		const resetTimer = setInterval(() => {
@@ -88,68 +91,10 @@ const plugin: any = {
 			}
 		}, 60_000);
 
-		// --- Event Broadcasting ---
-
-		// Broadcast an ObserveClaw event — stores + dispatches to webhooks
-		function broadcastAlert(alert: import("./src/types.js").AnomalyAlert): void {
-			alertStore.pushAlert(alert);
-			if (config.webhooks.length > 0) {
-				dispatchWebhooks(alert, config.webhooks, api.logger).catch(() => {
-					// Fire-and-forget — webhook failures don't block plugin operation
-				});
-			}
-		}
-
-		// Gateway RPC: query spend data
-		api.registerGatewayMethod("observeclaw.spend", ({ respond }) => {
-			respond(true, {
-				agents: spendTracker.getSummary(),
-				alerts: alertStore.getAlerts(50),
-			});
-		});
-
-		// Gateway RPC: query alerts
-		api.registerGatewayMethod("observeclaw.alerts", ({ respond }) => {
-			respond(true, { alerts: alertStore.getAlerts(50) });
-		});
-
-		// Gateway RPC: query single agent
-		api.registerGatewayMethod("observeclaw.agent", ({ params, respond }) => {
-			const agentId = params.agentId as string;
-			if (!agentId) {
-				respond(false, undefined, { code: "INVALID_REQUEST", message: "agentId required" });
-				return;
-			}
-			const spend = spendTracker.get(agentId);
-			const budget = config.budgets.agents[agentId] ?? config.budgets.defaults;
-			respond(true, {
-				agentId,
-				spend: spend
-					? { today: spend.today, thisMonth: spend.thisMonth, callCount: spend.callCount, lastCallAt: spend.lastCallAt }
-					: null,
-				budget,
-				budgetRatio: spend ? spendTracker.getBudgetRatio(agentId, budget.daily) : 0,
-				alerts: alertStore.getAlertsByAgent(agentId, 20),
-			});
-		});
-
-		// HTTP endpoint: GET /plugins/observeclaw/alerts for external integrations
-		api.registerHttpRoute({
-			path: "/plugins/observeclaw/alerts",
-			auth: "gateway",
-			match: "exact",
-			handler: async (_req, res) => {
-				res.writeHead(200, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ alerts: alertStore.getAlerts(50) }));
-			},
-		});
-
-		// Periodic anomaly check + spend summary
 		const anomalyTimer = setInterval(() => {
 			for (const [agentId, spend] of spendTracker.entries()) {
 				const budget = config.budgets.agents[agentId] ?? config.budgets.defaults;
-				const alerts = runDetectors(agentId, spend, config.anomaly, budget.daily);
-				for (const alert of alerts) {
+				for (const alert of runDetectors(agentId, spend, config.anomaly, budget.daily)) {
 					broadcastAlert(alert);
 					if (alert.severity === "critical") {
 						api.logger.error(`[observeclaw] ALERT: ${alert.message}`);
@@ -160,152 +105,82 @@ const plugin: any = {
 			}
 		}, config.anomaly.checkIntervalSeconds * 1000);
 
-		// --- Hooks ---
-
-		// Track spend on every LLM call
-		api.on("llm_output", (event: any, ctx: any) => {
-			if (!event.usage) return;
-
-			const agentId = ctx.agentId ?? "default";
-			const cost = spendTracker.record(
-				agentId,
-				event.provider ?? "unknown",
-				event.model ?? "unknown",
-				{
-					input: event.usage.input,
-					output: event.usage.output,
-					cacheRead: event.usage.cacheRead,
-					cacheWrite: event.usage.cacheWrite,
-				},
-				ctx.sessionKey,
-			);
-
-			const spend = spendTracker.get(agentId);
-			if (cost > 0) {
-				api.logger.info(
-					`[observeclaw] ${agentId} | call: $${cost.toFixed(4)} | today: $${spend?.today.toFixed(2)} | ${event.provider}/${event.model}`,
-				);
-			} else {
-				api.logger.warn(
-					`[observeclaw] ${agentId} | call: $0 (no pricing for ${event.provider}/${event.model}) | tokens: in=${event.usage.input ?? 0} out=${event.usage.output ?? 0}`,
-				);
-			}
-		});
-
-		// Budget enforcement — runs before every LLM call
-		api.on(
-			"before_model_resolve",
-			(_event, ctx) => {
-				const agentId = ctx.agentId ?? "default";
-				const decision = checkBudget(agentId, config);
-
-				if (decision.action === "downgrade") {
-					api.logger.warn(`[observeclaw] ${agentId} | ${decision.reason} -> ${decision.modelOverride}`);
-					broadcastAlert({
-						type: "budget_warning",
-						agentId,
-						severity: "warning",
-						message: decision.reason ?? "Approaching budget limit",
-					});
-					return {
-						modelOverride: decision.modelOverride,
-						providerOverride: decision.providerOverride,
-					};
-				}
-
-				if (decision.action === "block") {
-					api.logger.error(`[observeclaw] ${agentId} | BLOCKED: ${decision.reason}`);
-					broadcastAlert({
-						type: "budget_exceeded",
-						agentId,
-						severity: "critical",
-						action: "auto_pause",
-						message: decision.reason ?? "Budget exceeded",
-					});
-					return {
-						modelOverride: decision.modelOverride,
-					};
-				}
-			},
-			{ priority: -10 }, // Run after other hooks so we get final say
-		);
-
-		// Tool policy enforcement
-		api.on("before_tool_call", (event, ctx) => {
-			const agentId = ctx.agentId ?? "default";
-			const decision = checkTool(agentId, event.toolName, config);
-
-			if (!decision.allowed) {
-				api.logger.warn(`[observeclaw] ${agentId} | tool blocked: ${event.toolName} | ${decision.reason}`);
-				broadcastAlert({
-					type: "budget_warning", // reuse type — tool block is a policy event
-					agentId,
-					severity: "warning",
-					message: `Tool blocked: ${event.toolName} — ${decision.reason}`,
-				});
-				return {
-					block: true,
-					blockReason: decision.reason,
-				};
-			}
-		});
-
-		// Track productive activity (for idle burn detection)
-		// Both tool calls and successful message sends count as "productive"
-		api.on("after_tool_call", (_event, ctx) => {
-			const agentId = ctx.agentId ?? "default";
-			spendTracker.recordToolCall(agentId);
-		});
-
-		api.on("message_sent", (_event, ctx) => {
-			const agentId = (ctx as Record<string, unknown>).agentId as string | undefined;
-			if (agentId) spendTracker.recordToolCall(agentId);
-		});
-
-		// Cancel outbound messages if agent is over budget
-		api.on("message_sending", (_event, ctx) => {
-			const agentId = (ctx as Record<string, unknown>).agentId as string | undefined;
-			if (agentId && shouldCancelMessage(agentId, config)) {
-				api.logger.warn(`[observeclaw] ${agentId} | outbound message cancelled (over budget)`);
-				return { cancel: true };
-			}
-		});
-
-		// Session lifecycle
-		api.on("session_start", (_event, ctx) => {
-			api.logger.info(`[observeclaw] session started: ${ctx.sessionKey} (agent: ${ctx.agentId})`);
-		});
-
-		api.on("session_end", (_event, ctx) => {
-			const agentId = ctx.agentId ?? "default";
-			const spend = spendTracker.get(agentId);
-			const session = spend?.sessions.get(ctx.sessionKey ?? "");
-			if (session) {
-				api.logger.info(
-					`[observeclaw] session ended: ${ctx.sessionKey} | cost: $${session.cost.toFixed(4)} | calls: ${session.callCount}`,
-				);
-			}
-		});
-
-		// Gateway lifecycle
-		api.on("gateway_start", () => {
-			api.logger.info("[observeclaw] gateway started — tracking active");
-		});
-
-		api.on("gateway_stop", () => {
+		function clearTimers(): void {
 			clearInterval(hourlyTimer);
 			clearInterval(resetTimer);
 			clearInterval(anomalyTimer);
+		}
 
-			// Final spend summary
-			const summary = spendTracker.getSummary();
-			if (summary.length > 0) {
-				api.logger.info("[observeclaw] final spend summary:");
-				for (const s of summary) {
-					api.logger.info(`  ${s.agentId}: today=$${s.today.toFixed(2)} month=$${s.thisMonth.toFixed(2)} calls=${s.callCount}`);
-				}
+		// --- Event Broadcasting ---
+
+		function broadcastAlert(alert: AnomalyAlert): void {
+			alertStore.pushAlert(alert);
+			if (config.webhooks.length > 0) {
+				dispatchWebhooks(alert, config.webhooks, api.logger).catch(() => {});
 			}
+		}
+
+		// --- Gateway RPC ---
+
+		api.registerGatewayMethod("observeclaw.spend", ({ respond }: { respond: Function }) => {
+			respond(true, { agents: spendTracker.getSummary(), alerts: alertStore.getAlerts(50) });
 		});
+
+		api.registerGatewayMethod("observeclaw.alerts", ({ respond }: { respond: Function }) => {
+			respond(true, { alerts: alertStore.getAlerts(50) });
+		});
+
+		api.registerGatewayMethod("observeclaw.agent", ({ params, respond }: { params: Record<string, unknown>; respond: Function }) => {
+			const agentId = params.agentId as string;
+			if (!agentId) { respond(false, undefined, { code: "INVALID_REQUEST", message: "agentId required" }); return; }
+			const spend = spendTracker.get(agentId);
+			const budget = config.budgets.agents[agentId] ?? config.budgets.defaults;
+			respond(true, {
+				agentId,
+				spend: spend ? { today: spend.today, thisMonth: spend.thisMonth, callCount: spend.callCount, lastCallAt: spend.lastCallAt } : null,
+				budget,
+				budgetRatio: spend ? spendTracker.getBudgetRatio(agentId, budget.daily) : 0,
+				alerts: alertStore.getAlertsByAgent(agentId, 20),
+			});
+		});
+
+		api.registerHttpRoute({
+			path: "/plugins/observeclaw/alerts",
+			auth: "gateway",
+			match: "exact",
+			handler: async (_req: unknown, res: { writeHead: Function; end: Function }) => {
+				res.writeHead(200, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ alerts: alertStore.getAlerts(50) }));
+			},
+		});
+
+		// --- Hooks ---
+
+		validateRoutingOnStartup(config, api.logger);
+
+		api.on("llm_output", (event: unknown, ctx: unknown) => handleLlmOutput(event as Parameters<typeof handleLlmOutput>[0], ctx as Parameters<typeof handleLlmOutput>[1], api.logger));
+
+		api.on("before_model_resolve", async (event: unknown, ctx: unknown) =>
+			handleBeforeModelResolve(event as { prompt?: string }, ctx as Parameters<typeof handleBeforeModelResolve>[1], config, api.logger, broadcastAlert),
+			{ priority: -10 },
+		);
+
+		api.on("before_tool_call", (event: unknown, ctx: unknown) =>
+			handleBeforeToolCall(event as { toolName: string }, ctx as Parameters<typeof handleBeforeToolCall>[1], config, api.logger, broadcastAlert),
+		);
+
+		api.on("after_tool_call", (_event: unknown, ctx: unknown) => handleAfterToolCall(_event, ctx as Parameters<typeof handleAfterToolCall>[1]));
+
+		api.on("message_sending", (_event: unknown, ctx: unknown) =>
+			handleMessageSending(_event, ctx as { agentId?: string }, config, api.logger),
+		);
+
+		api.on("message_sent", (_event: unknown, ctx: unknown) => handleMessageSent(_event, ctx as { agentId?: string }));
+
+		api.on("session_start", (_event: unknown, ctx: unknown) => handleSessionStart(_event, ctx as Parameters<typeof handleSessionStart>[1], api.logger));
+		api.on("session_end", (_event: unknown, ctx: unknown) => handleSessionEnd(_event, ctx as Parameters<typeof handleSessionEnd>[1], api.logger));
+		api.on("gateway_start", () => handleGatewayStart(api.logger));
+		api.on("gateway_stop", () => handleGatewayStop(api.logger, clearTimers));
 	},
 };
 
