@@ -55,7 +55,8 @@ export async function handleBeforeModelResolve(
 			action: "auto_pause",
 			message: budgetDecision.reason ?? "Budget exceeded",
 		});
-		return { modelOverride: budgetDecision.modelOverride };
+		// Force unknown model — no LLM call, zero cost
+		return { modelOverride: `__OBSERVECLAW_BLOCKED__Budget exceeded. ${budgetDecision.reason}` };
 	}
 
 	// 2. Routing pipeline (only if enabled and under budget)
