@@ -2,7 +2,10 @@ import * as spendTracker from "./spend-tracker.js";
 import type { BudgetConfig, ObserveClawConfig } from "./types.js";
 
 export function resolveBudget(agentId: string, config: ObserveClawConfig): BudgetConfig {
-	return config.budgets.agents[agentId] ?? config.budgets.defaults;
+	const agentBudget = config.budgets.agents[agentId];
+	if (!agentBudget) return config.budgets.defaults;
+	// Merge with defaults so missing fields (especially warnAt) are inherited
+	return { ...config.budgets.defaults, ...agentBudget };
 }
 
 export interface BudgetDecision {

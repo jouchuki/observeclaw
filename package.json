@@ -1,6 +1,6 @@
 {
   "name": "observeclaw",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Agent spend tracking, budget enforcement, tool policy, and anomaly detection for OpenClaw",
   "type": "module",
   "files": [
